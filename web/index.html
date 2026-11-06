@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pakistan Air Quality Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+<style>
+  :root { --bg:#f4f5fb; --card:#fff; --ink:#14142b; --mute:#6b6b83; --accent:#4f46e5; }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: system-ui, sans-serif; background:var(--bg); color:var(--ink); }
+  header { padding:28px 20px 8px; max-width:1150px; margin:auto; }
+  h1 { margin:0 0 6px; font-size:1.7rem; }
+  p.sub { margin:0; color:var(--mute); }
+  main { max-width:1150px; margin:auto; padding:12px 20px 40px; display:grid; gap:16px; }
+  .card { background:var(--card); border-radius:16px; padding:18px; box-shadow:0 1px 6px rgba(0,0,0,.06); }
+  .row { display:grid; gap:16px; grid-template-columns: repeat(auto-fit,minmax(320px,1fr)); }
+  select { padding:8px 12px; border-radius:10px; border:1px solid #d4d4e4; font-size:1rem; }
+  .stats { display:grid; grid-template-columns: repeat(auto-fit,minmax(110px,1fr)); gap:10px; margin-top:12px; }
+  .stat { background:var(--bg); border-radius:12px; padding:10px; text-align:center; }
+  .stat b { display:block; font-size:1.2rem; }
+  .stat span { color:var(--mute); font-size:.78rem; }
+  h2 { margin:0 0 10px; font-size:1.05rem; }
+  table.corr { border-collapse:collapse; font-size:.72rem; width:100%; }
+  table.corr td, table.corr th { padding:4px; text-align:center; }
+  .scroll { overflow-x:auto; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Pakistan Air Quality & Smog Dashboard</h1>
+  <p class="sub">Open-Meteo Air Quality API · 10 major cities · <span id="gen"></span></p>
+</header>
+<main>
+  <div class="card">
+    <label>City: <select id="city"></select></label>
+    <div class="stats" id="stats"></div>
+  </div>
+  <div class="row">
+    <div class="card"><h2>Average PM2.5 by hour of day</h2><canvas id="hourly"></canvas></div>
+    <div class="card"><h2>Mean PM2.5 by season</h2><canvas id="season"></canvas></div>
+  </div>
+  <div class="card"><h2>Monthly mean PM2.5 (selected city vs. all)</h2><canvas id="monthly" height="110"></canvas></div>
+  <div class="row">
+    <div class="card"><h2>City ranking by mean PM2.5 (µg/m³)</h2><canvas id="rank"></canvas></div>
+    <div class="card"><h2>% of hours above WHO 24h PM2.5 guideline</h2><canvas id="who"></canvas></div>
+  </div>
+  <div class="card"><h2>Correlation between pollutants</h2><div class="scroll" id="corr"></div></div>
+</main>
+<script>
+const COLORS = ["#4f46e5","#0ea5e9","#16a34a","#f59e0b","#dc2626","#9333ea","#0d9488","#db2777","#65a30d","#ea580c"];
+const NAMES = { pm2_5:"PM2.5", pm10:"PM10", co:"CO", no2:"NO₂", so2:"SO₂", o3:"O₃", co2:"CO₂",
+                ch4:"CH₄", dust:"Dust", aod:"AOD", us_aqi:"US AQI", european_aqi:"EU AQI" };
+
+fetch("data.json").then(r => r.json()).then(D => {
+  document.getElementById("gen").textContent = `${D.date_range[0]} to ${D.date_range[1]}`;
+  const cities = D.ranking;
+  const sel = document.getElementById("city");
+  [...cities].sort().forEach(c => sel.add(new Option(c, c)));
+  sel.value = cities.includes("Lahore") ? "Lahore" : cities[0];
+
+  const bar = (id, labels, data, color) => new Chart(document.getElementById(id), {
+    type:"bar", data:{ labels, datasets:[{ data, backgroundColor:color }] },
+    options:{ indexAxis:"y", plugins:{ legend:{display:false} } } });
+  bar("rank", cities, cities.map(c => D.cities[c].mean.pm2_5), "#4f46e5");
+  const whoSorted = [...cities].sort((a,b) => D.cities[b].pct_hours_above_who - D.cities[a].pct_hours_above_who);
+  bar("who", whoSorted, whoSorted.map(c => D.cities[c].pct_hours_above_who), "#dc2626");
+
+  const hourly = new Chart(document.getElementById("hourly"), { type:"line",
+    data:{ labels:[...Array(24).keys()], datasets:[{ label:"PM2.5", borderColor:"#4f46e5", tension:.3, data:[] }] } });
+  const season = new Chart(document.getElementById("season"), { type:"bar",
+    data:{ labels:D.seasons, datasets:[{ label:"PM2.5", backgroundColor:["#38bdf8","#4ade80","#fbbf24","#f97316"], data:[] }] },
+    options:{ plugins:{ legend:{display:false} } } });
+  const monthly = new Chart(document.getElementById("monthly"), { type:"line",
+    data:{ labels:D.cities[cities[0]].monthly.months, datasets:[] }, options:{ elements:{ point:{radius:0} } } });
+
+  function show() {
+    const name = sel.value, c = D.cities[name];
+    hourly.data.datasets[0].data = c.hourly_pm25; hourly.update();
+    season.data.datasets[0].data = D.seasons.map(s => c.seasonal_pm25[s]); season.update();
+    monthly.data.datasets = cities.map((k, i) => ({
+      label:k, data:D.cities[k].monthly.pm25, tension:.3,
+      borderWidth: k === name ? 4 : 1,
+      borderColor: k === name ? "#dc2626" : COLORS[i % 10] + "88" }));
+    monthly.update();
+    document.getElementById("stats").innerHTML = Object.entries(c.mean)
+      .map(([k,v]) => `<div class="stat"><b>${v ?? "n/a"}</b><span>${NAMES[k]} mean</span></div>`).join("") +
+      `<div class="stat"><b>${c.pct_hours_above_who}%</b><span>hours above WHO PM2.5</span></div>`;
+  }
+  sel.onchange = show; show();
+
+  // correlation heatmap as a coloured table
+  const L = D.correlation.labels, M = D.correlation.matrix;
+  const col = v => v === null ? "#eee" : v >= 0 ? `rgba(220,38,38,${Math.abs(v)})` : `rgba(37,99,235,${Math.abs(v)})`;
+  document.getElementById("corr").innerHTML = "<table class='corr'><tr><th></th>" +
+    L.map(l => `<th>${NAMES[l]}</th>`).join("") + "</tr>" +
+    M.map((row,i) => `<tr><th>${NAMES[L[i]]}</th>` +
+      row.map(v => `<td style="background:${col(v)}" title="${v}">${v === null ? "" : v.toFixed(2)}</td>`).join("") + "</tr>").join("") +
+    "</table>";
+});
+</script>
+</body>
+</html>

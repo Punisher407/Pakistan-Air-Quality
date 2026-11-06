@@ -1,0 +1,6 @@
+pandas
+pydantic>=2
+requests
+psycopg2-binary
+matplotlib
+seaborn
